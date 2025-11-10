@@ -50,14 +50,14 @@ from config import BANNED_USERS, lyrical
 @app.on_message(
     filters.command(
         [
-            "play",
-            "vplay",
-            "cplay",
-            "cvplay",
-            "playforce",
-            "vplayforce",
-            "cplayforce",
-            "cvplayforce",
+            "oynat",
+            "voynat",
+            "koynat",
+            "kvoynat",
+            "hoynat",
+            "vhoynat",
+            "khoynat",
+            "kchoynat",
         ]
     )
     & filters.group
@@ -373,8 +373,8 @@ async def play_commnd(
                     track_id,
                     user_id,
                     "v" if video else "a",
-                    "c" if channel else "g",
-                    "f" if fplay else "d",
+                    "k" if channel else "g",
+                    "h" if fplay else "d",
                 )
                 return await mystic.edit_text(
                     _["play_13"],
@@ -412,8 +412,8 @@ async def play_commnd(
                 ran_hash,
                 message.from_user.id,
                 plist_type,
-                "c" if channel else "g",
-                "f" if fplay else "d",
+                "k" if channel else "g",
+                "h" if fplay else "d",
             )
             await mystic.delete()
             await message.reply_photo(
@@ -430,8 +430,8 @@ async def play_commnd(
                     message.from_user.id,
                     query,
                     0,
-                    "c" if channel else "g",
-                    "f" if fplay else "d",
+                    "k" if channel else "g",
+                    "h" if fplay else "d",
                 )
                 await mystic.delete()
                 await message.reply_photo(
@@ -448,8 +448,8 @@ async def play_commnd(
                     _,
                     track_id,
                     message.from_user.id,
-                    "c" if channel else "g",
-                    "f" if fplay else "d",
+                    "k" if channel else "g",
+                    "h" if fplay else "d",
                 )
                 await mystic.delete()
                 await message.reply_photo(
@@ -500,15 +500,15 @@ async def play_music(client, CallbackQuery, _):
             track_id,
             CallbackQuery.from_user.id,
             mode,
-            "c" if cplay == "c" else "g",
-            "f" if fplay else "d",
+            "k" if cplay == "k" else "g",
+            "h" if fplay else "d",
         )
         return await mystic.edit_text(
             _["play_13"],
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     video = True if mode == "v" else None
-    ffplay = True if fplay == "f" else None
+    ffplay = True if fplay == "h" else None
     try:
         await stream(
             _,
@@ -574,7 +574,7 @@ async def play_playlists_command(client, CallbackQuery, _):
     )
     videoid = lyrical.get(videoid)
     video = True if mode == "v" else None
-    ffplay = True if fplay == "f" else None
+    ffplay = True if fplay == "h" else None
     spotify = True
     if ptype == "yt":
         spotify = False

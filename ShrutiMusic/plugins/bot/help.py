@@ -68,11 +68,19 @@ async def helper_private(
         _ = get_string(language)
         from ShrutiMusic.utils.inline.help import help_pannel_page1
         keyboard = help_pannel_page1(_)
-        await update.reply_photo(
-            photo=START_IMG_URL,
-            caption=_["help_1"].format(SUPPORT_GROUP),
-            reply_markup=keyboard,
-        )
+
+        # >>> BURASI DÜZELTİLDİ <<<
+        if START_IMG_URL:
+            await update.reply_photo(
+                photo=START_IMG_URL,
+                caption=_["help_1"].format(SUPPORT_GROUP),
+                reply_markup=keyboard,
+            )
+        else:
+            await update.reply_text(
+                _["help_1"].format(SUPPORT_GROUP),
+                reply_markup=keyboard,
+            )
 
 
 @app.on_message(filters.command(["help"]) & filters.group & ~BANNED_USERS)

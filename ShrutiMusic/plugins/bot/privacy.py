@@ -4,14 +4,15 @@ from pyrogram.enums import ParseMode
 from ShrutiMusic import app
 import random
 
-LOG_GROUP_ID = -1002663919856
-SUDO_ID = 7035704703
-
-# Aktif talep bekleyen kullanıcılar {user_id: ticket_id}
-PENDING_TICKETS = {}
+# ==========================
+# Ayarlar
+# ==========================
+LOG_GROUP_ID = -1002663919856  # Log grubunun ID'si
+SUDO_ID = 7035704703           # Sudo ID
+PENDING_TICKETS = {}           # {user_id: ticket_id}
 
 # ==========================
-# Destek paneli
+# Destek paneli komutu
 # ==========================
 @app.on_message(filters.command("destek"))
 async def support_panel(client: Client, message: Message):
@@ -46,19 +47,20 @@ async def open_ticket(client: Client, callback_query: CallbackQuery):
     )
 
 # ==========================
-# Kullanıcının mesajını alma
+# Kullanıcının mesajını alma (hem özel hem grup)
 # ==========================
 @app.on_message(filters.text)
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
     if user_id not in PENDING_TICKETS:
-        return
+        return  # Talep yoksa çık
 
     ticket_id = PENDING_TICKETS[user_id]
     user_msg = message.text
     user_mention = message.from_user.mention
     chat_type = "Özel" if message.chat.type == "private" else message.chat.title
 
+    # Log mesajı
     log_text = (
         f"📩 **Yeni Talep!**\n"
         f"Talep ID: `{ticket_id}`\n"
@@ -67,6 +69,7 @@ async def receive_ticket(client: Client, message: Message):
         f"Yazıldığı yer: {chat_type}"
     )
 
+    # Buton: özelden veya gruptan yazılmışa göre
     if message.chat.type == "private":
         btn_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
     else:
@@ -74,7 +77,7 @@ async def receive_ticket(client: Client, message: Message):
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yanıtla", url=btn_url)]])
 
-    # Log grubuna ve sudo'ya gönder
+    # Log grubuna ve sudo’ya gönder
     await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     await client.send_message(SUDO_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
@@ -84,5 +87,5 @@ async def receive_ticket(client: Client, message: Message):
         parse_mode=ParseMode.MARKDOWN
     )
 
-    # Talep tamamlandı
+    # Talep tamamlandı → kayıt sil
     del PENDING_TICKETS[user_id]

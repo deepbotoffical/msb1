@@ -26,7 +26,7 @@ from ShrutiMusic import app
 import requests
 import os
 
-@app.on_message(filters.command("vid"))
+@app.on_message(filters.command("reels"))
 async def video_downloader(_, message: Message):
     if len(message.command) < 2:
         return await message.reply_text("❌ Please provide a video URL.\n\nExample:\n/vid Any_video_url")

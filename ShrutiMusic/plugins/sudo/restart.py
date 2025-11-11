@@ -49,6 +49,15 @@ async def is_heroku():
     return "heroku" in socket.getfqdn()
 
 
+@app.on_message(filters.command(["namütenahi", "n"]))
+@language
+async def log_(client, message, _):
+        await message.reply_photo(
+          photo="https://files.catbox.moe/7h8kqb.jpg",
+          caption="<b><u>Verdiğim Her Sözü Tutarım Hucamm. Ben Egoist Bey</u></b>",
+        )
+
+
 @app.on_message(filters.command(["getlog", "logs", "getlogs"]) & SUDOERS)
 @language
 async def log_(client, message, _):

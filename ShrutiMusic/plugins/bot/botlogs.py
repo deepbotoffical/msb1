@@ -49,18 +49,18 @@ async def join_watcher(_, message):
                     pass
                 
                 msg = (
-                    f"Music Bot Added In A New Group\n\n"
-                    f"Chat Name: {message.chat.title}\n"
-                    f"Chat ID: {message.chat.id}\n"
-                    f"Chat Username: @{username}\n"
-                    f"Group Members: {count}\n"
-                    f"Added By: {message.from_user.mention}"
+                    f"Yeni Bir Gruba Müzik Botu Eklendi\n\n"
+                    f"Sohbet Adı: {message.chat.title}\n"
+                    f"Sohbet ID: {message.chat.id}\n"
+                    f"Sohbet Kullanıcı Adı: @{username}\n"
+                    f"Grup Üyeleri: {count}\n"
+                    f"Ekleyen: {message.from_user.mention}"
                     f"{invite_link}"
                 )
                 
                 buttons = []
                 if message.from_user.id:
-                    buttons.append([InlineKeyboardButton("Added By", 
+                    buttons.append([InlineKeyboardButton("Ekleyen", 
                                     url=f"tg://openmessage?user_id={message.from_user.id}")])
                 
                 await app.send_photo(

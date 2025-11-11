@@ -49,7 +49,11 @@ async def open_ticket(client: Client, callback_query: CallbackQuery):
     ticket_id = random.randint(1000, 9999)
     ACTIVE_TICKETS[user_id] = ticket_id
 
-    await callback_query.answer(f"📝 Lütfen sorunuzu veya önerinizi yazınız.\nTalep ID: {ticket_id}", show_alert=True)
+    # Kullanıcıya mesaj olarak talep yazması gerektiğini bildir
+    await callback_query.message.reply_text(
+        f"📝 Lütfen sorunuzu veya önerinizi yazınız.\nTalep ID: `{ticket_id}`",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ==========================
 # Kullanıcının mesajını alma

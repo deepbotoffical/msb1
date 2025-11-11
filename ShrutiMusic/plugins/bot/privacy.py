@@ -7,8 +7,8 @@ import random
 # ==========================
 # Ayarlar
 # ==========================
-LOG_GROUP_ID = -1001234567890  # Log grubun ID'si
-SUDO_ID = 123456789  # Sudo kullanıcı ID
+LOG_GROUP_ID = -1002663919856  # Log grubun ID'si
+SUDO_ID = 7035704703  # Sudo kullanıcı ID
 ACTIVE_TICKETS = {}  # Aktif talep kayıtları
 
 # ==========================

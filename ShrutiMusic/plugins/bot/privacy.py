@@ -8,7 +8,7 @@ import random
 # Ayarlar
 # ==========================
 LOG_GROUP_ID = -1002663919856  # Log grubunun ID'si
-SUDO_ID = 7035704703           # Sudo ID
+SUDO_ID = 7035704703           # Sudo kullanıcı ID
 PENDING_TICKETS = {}           # {user_id: ticket_id}
 
 # ==========================
@@ -71,13 +71,13 @@ async def receive_ticket(client: Client, message: Message):
 
     # Buton: özelden veya gruptan yazılmışa göre
     if message.chat.type == "private":
-        btn_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+        btn_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
     else:
-        btn_url = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+        btn_url = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yanıtla", url=btn_url)]])
 
-    # Log grubuna ve sudo’ya gönder
+    # Log grubuna ve sudo'ya gönder
     await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     await client.send_message(SUDO_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 

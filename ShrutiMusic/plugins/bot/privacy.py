@@ -1,44 +1,21 @@
-# Copyright (c) 2025 Nand Yaduwanshi <NoxxOP>
-# Location: Supaul, Bihar
-#
-# All rights reserved.
-#
-# This code is the intellectual property of Nand Yaduwanshi.
-# You are not allowed to copy, modify, redistribute, or use this
-# code for commercial or personal projects without explicit permission.
-#
-# Allowed:
-# - Forking for personal learning
-# - Submitting improvements via pull requests
-#
-# Not Allowed:
-# - Claiming this code as your own
-# - Re-uploading without credit or permission
-# - Selling or using commercially
-#
-# Contact for permissions:
-# Email: badboy809075@gmail.com
-
-
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.enums import ParseMode
 from ShrutiMusic import app
-import config
 import random
 
 # ==========================
 # Ayarlar
 # ==========================
-LOG_GROUP_ID = -1002663919856  # Buraya log grubun ID'si
-SUDO_ID = 7035704703  # Sudo kullanıcı ID
-ACTIVE_TICKETS = {}  # Talep açan kullanıcılar için geçici kayıt
+LOG_GROUP_ID = -1001234567890  # Log grubun ID'si
+SUDO_ID = 123456789  # Sudo kullanıcı ID
+ACTIVE_TICKETS = {}  # Aktif talep kayıtları
 
 # ==========================
 # DESTEK PANELİ KOMUTU
 # ==========================
-@app.on_message(filters.command("destek") & ~filters.edited)
-async def support_panel(client, message: Message):
+@app.on_message(filters.command("destek"))
+async def support_panel(client: Client, message: Message):
     text = (
         "✨ **DEEPMusic Destek Paneli**\n\n"
         "Herhangi bir sorununuz veya öneriniz mi var?\n\n"
@@ -69,49 +46,54 @@ async def open_ticket(client: Client, callback_query: CallbackQuery):
         return
 
     # Talep açılıyor
-    ticket_id = random.randint(1000, 9999)  # Basit ID
+    ticket_id = random.randint(1000, 9999)
     ACTIVE_TICKETS[user_id] = ticket_id
 
     await callback_query.answer(f"📝 Lütfen sorunuzu veya önerinizi yazınız.\nTalep ID: {ticket_id}", show_alert=True)
 
-    # Kullanıcının yazacağı mesajı bekle
-    @app.on_message(filters.private & filters.incoming & filters.user(user_id))
-    async def receive_ticket(c: Client, msg: Message):
-        user_msg = msg.text
-        user_mention = msg.from_user.mention
-        chat_type = "Özel" if msg.chat.type == "private" else msg.chat.title
+# ==========================
+# Kullanıcının mesajını alma
+# ==========================
+@app.on_message(filters.private & filters.incoming)
+async def receive_ticket(client: Client, message: Message):
+    user_id = message.from_user.id
 
-        # Log mesajı
-        log_text = (
-            f"📩 **Yeni Talep!**\n"
-            f"Talep ID: `{ticket_id}`\n"
-            f"Talep eden: {user_mention}\n"
-            f"Mesaj: {user_msg}\n"
-            f"Yazıldığı yer: {chat_type}"
-        )
+    if user_id not in ACTIVE_TICKETS:
+        return  # Açık talep yoksa çık
 
-        # Yönlendirme butonu
-        if msg.chat.type == "private":
-            btn_url = f"https://t.me/{msg.from_user.username}" if msg.from_user.username else f"https://t.me/c/{str(msg.chat.id)[4:]}/{msg.message_id}"
-        else:
-            btn_url = f"https://t.me/c/{str(msg.chat.id)[4:]}/{msg.message_id}"
+    ticket_id = ACTIVE_TICKETS[user_id]
+    user_msg = message.text
+    user_mention = message.from_user.mention
+    chat_type = "Özel" if message.chat.type == "private" else message.chat.title
 
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Yanıtla", url=btn_url)]]
-        )
+    # Log mesajı
+    log_text = (
+        f"📩 **Yeni Talep!**\n"
+        f"Talep ID: `{ticket_id}`\n"
+        f"Talep eden: {user_mention}\n"
+        f"Mesaj: {user_msg}\n"
+        f"Yazıldığı yer: {chat_type}"
+    )
 
-        # Log grubuna ve sudo kullanıcıya gönder
-        await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
-        await client.send_message(SUDO_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+    # Yönlendirme butonu
+    if message.chat.type == "private":
+        btn_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
+    else:
+        btn_url = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.message_id}"
 
-        # Kullanıcıya onay mesajı
-        await msg.reply_text(
-            f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`\nEn kısa sürede dönüş sağlanacaktır.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Yanıtla", url=btn_url)]]
+    )
 
-        # Talep tamamlandı → ACTIVE_TICKETS kaydını sil
-        del ACTIVE_TICKETS[user_id]
+    # Log grubuna ve sudo’ya gönder
+    await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+    await client.send_message(SUDO_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
-        # Handler'ı kaldır
-        app.remove_handler(receive_ticket)
+    # Kullanıcıya onay mesajı
+    await message.reply_text(
+        f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`\nEn kısa sürede dönüş sağlanacaktır.",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+    # Talep tamamlandı → kayıt sil
+    del ACTIVE_TICKETS[user_id]

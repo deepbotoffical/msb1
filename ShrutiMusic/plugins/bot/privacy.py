@@ -58,7 +58,7 @@ async def open_ticket(client: Client, callback_query: CallbackQuery):
 # ==========================
 # Kullanıcının mesajını alma
 # ==========================
-@app.on_message(filters.private & filters.incoming)
+@app.on_message(filters.private & filters.text)
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
 

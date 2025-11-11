@@ -82,12 +82,13 @@ async def sudoers_list(client, message: Message, _):
 
 @app.on_message(filters.command(["namütenahi", "n"]))
 @language
-     await message.reply_photo(
-       photo="https://files.catbox.moe/7h8kqb.jpg",
-       caption=(
-               '<b><u>Verdiğim Her Sözü Tutarım Hucamm.</u></b>\n\n'
-               'Ben Egoist Bey'
-              ),
+async def namutenahi(client, message, _):
+    await message.reply_photo(
+        photo="https://files.catbox.moe/7h8kqb.jpg",
+        caption=(
+            '<b><u>Verdiğim Her Sözü Tutarım Hucamm.</u></b>\n\n'
+            'Ben Egoist Bey'
+        ),
     )
       
 # ©️ Copyright Reserved - @NoxxOP  Nand Yaduwanshi

@@ -13,7 +13,6 @@ PENDING_TICKETS = {}       # {user_id: {"ticket_id": id, "category": kategori, "
 PENDING_ADMIN_REPLY = {}   # {sudo_id: {"target_user": id, "ticket_id": id}}
 CLOSED_TICKETS = set()     # Kapatılan talepler
 REMINDER_DELAY_MINUTES = 24 * 60  # default 24 saat
-REMINDER_PERIODIC = True  # Talep yanıtlanmazsa periyodik hatırlatma
 
 # ==========================
 # /destek komutu ve kategori seçimi
@@ -58,8 +57,8 @@ async def category_selected(client: Client, callback_query: CallbackQuery):
 # ==========================
 @app.on_message(
     filters.private &
-    ~(filters.command) &  # Komutları yoksay
-    ~(filters.user(SUDO_IDS)) &  # Sudo mesajlarını yoksay
+    ~filters.command &      # Komutları yoksay
+    ~filters.user(SUDO_IDS) &  # Sudo mesajlarını yoksay
     (filters.text | filters.photo | filters.document | filters.audio)
 )
 async def receive_ticket(client: Client, message: Message):
@@ -112,126 +111,6 @@ async def receive_ticket(client: Client, message: Message):
 # ==========================
 # Talep iptal (kullanıcı veya Sudo)
 # ==========================
-@app.on_callback_query(filters.regex(r"^cancel_ticket:(\d+)$"))
-async def cancel_ticket(client: Client, callback_query: CallbackQuery):
-    user_id = int(callback_query.matches[0].group(1))
-    if user_id in PENDING_TICKETS:
-        del PENDING_TICKETS[user_id]
-        await callback_query.edit_message_text("❌ Talep iptal edildi.")
-        try:
-            await client.send_message(user_id, "❌ Destek talebiniz iptal edildi.")
-        except:
-            pass
-    else:
-        await callback_query.answer("❌ Bu talep zaten kapatılmış.", show_alert=True)
-
-# ==========================
-# Sudo Bot Üzerinden Cevap
-# ==========================
-@app.on_callback_query(filters.regex(r"^admin_reply:(\d+):(\d+)$"))
-async def admin_reply_callback(client: Client, callback_query: CallbackQuery):
-    sudo_id = callback_query.from_user.id
-    user_id = int(callback_query.matches[0].group(1))
-    ticket_id = int(callback_query.matches[0].group(2))
-
-    PENDING_ADMIN_REPLY[sudo_id] = {"target_user": user_id, "ticket_id": ticket_id}
-    await callback_query.answer("✍️ Mesajınızı yazın, kullanıcıya iletilecek.", show_alert=True)
-    await client.send_message(sudo_id, f"💬 Talep `{ticket_id}` için cevap yazın. İptal için /iptal.")
-
-@app.on_message(filters.text & filters.user(SUDO_IDS))
-async def handle_sudo_reply(client: Client, message: Message):
-    sudo_id = message.from_user.id
-    if sudo_id not in PENDING_ADMIN_REPLY:
-        return
-
-    info = PENDING_ADMIN_REPLY.pop(sudo_id)
-    target_user = info["target_user"]
-    ticket_id = info["ticket_id"]
-
-    if message.text.lower() == "/iptal":
-        await message.reply_text("❌ Yanıt iptal edildi.")
-        return
-
-    try:
-        await client.send_message(target_user, f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`):**\n\n{message.text}")
-        await message.reply_text("✅ Mesaj kullanıcıya iletildi.", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Talebi Kapat", callback_data=f"close_ticket:{ticket_id}")]
-        ]))
-    except Exception as e:
-        await message.reply_text(f"❌ Kullanıcıya iletilemedi: {e}")
-
-# ==========================
-# Talep kapatma
-# ==========================
-@app.on_callback_query(filters.regex(r"^close_ticket:(\d+)$"))
-async def close_ticket(client: Client, callback_query: CallbackQuery):
-    ticket_id = int(callback_query.matches[0].group(1))
-    CLOSED_TICKETS.add(ticket_id)
-    await callback_query.edit_message_text(f"✅ Talep Kapatıldı\nTalep ID: `{ticket_id}`")
-    await callback_query.answer("Talep başarıyla kapatıldı ✅", show_alert=True)
-
-# ==========================
-# Talep hatırlatma (periyodik)
-# ==========================
-async def start_ticket_reminder(client: Client, user_id: int, ticket_id: int):
-    while True:
-        await asyncio.sleep(REMINDER_DELAY_MINUTES * 60)
-        if user_id in PENDING_TICKETS and PENDING_TICKETS[user_id]["ticket_id"] == ticket_id:
-            try:
-                await client.send_message(user_id, f"⏰ Talep ID: `{ticket_id}` için henüz cevap gelmedi. En kısa sürede destek ekibimiz dönüş yapacaktır.", parse_mode=ParseMode.MARKDOWN)
-            except:
-                pass
-            for sudo_id in SUDO_IDS:
-                await client.send_message(sudo_id, f"⏰ Talep ID: `{ticket_id}` henüz yanıtlanmadı. Kullanıcı: [{user_id}](tg://user?id={user_id})", parse_mode=ParseMode.MARKDOWN)
-        else:
-            break  # Talep kapatıldı veya iptal edildi
-
-# ==========================
-# /sudover komutu
-# ==========================
-@app.on_message(filters.command("sudover") & filters.user(SUDO_IDS[0]))
-async def manage_sudo(client: Client, message: Message):
-    args = message.text.split()
-    if len(args) < 3:
-        await message.reply_text("❌ Kullanım: /sudover <ekle/remove> <user_id>")
-        return
-
-    action = args[1].lower()
-    try:
-        user_id = int(args[2])
-    except:
-        await message.reply_text("❌ Geçerli bir user_id girin.")
-        return
-
-    global SUDO_IDS
-
-    if action in ["ekle", "add"]:
-        if user_id not in SUDO_IDS:
-            SUDO_IDS.append(user_id)
-            await message.reply_text(f"✅ User `{user_id}` Sudo listesine eklendi.")
-        else:
-            await message.reply_text("❗ Bu kullanıcı zaten Sudo listesinde.")
-    elif action in ["remove", "çıkar"]:
-        if user_id in SUDO_IDS:
-            SUDO_IDS.remove(user_id)
-            await message.reply_text(f"✅ User `{user_id}` Sudo listesinden çıkarıldı.")
-        else:
-            await message.reply_text("❗ Bu kullanıcı Sudo listesinde değil.")
-    else:
-        await message.reply_text("❌ Geçersiz işlem. Kullanım: /sudover <ekle/remove> <user_id>")
-
-# ==========================
-# /hatirlama komutu
-# ==========================
-@app.on_message(filters.command("hatirlama") & filters.user(SUDO_IDS[0]))
-async def set_reminder_time(client: Client, message: Message):
-    try:
-        minutes = int(message.text.split()[1])
-        global REMINDER_DELAY_MINUTES
-        REMINDER_DELAY_MINUTES = minutes
-        await message.reply_text(f"✅ Hatırlatma süresi {minutes} dakika olarak ayarlandı.")
-    except:
-        await message.reply_text("❌ Kullanım: /hatirlama <dakika>")# ==========================
 @app.on_callback_query(filters.regex(r"^cancel_ticket:(\d+)$"))
 async def cancel_ticket(client: Client, callback_query: CallbackQuery):
     user_id = int(callback_query.matches[0].group(1))

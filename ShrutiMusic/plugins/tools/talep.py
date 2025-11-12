@@ -6,9 +6,9 @@ from pyrogram.enums import ParseMode
 from ShrutiMusic import app
 
 LOG_GROUP_ID = -1002663919856
-SUDO_IDS = [7035704703]  # Başlangıç Sudo
-PENDING_TICKETS = {}      # {user_id: {"ticket_id":..., "type":..., "chat_type":...}}
-PENDING_ADMIN_REPLY = {}  # {sudo_id: {"target_user":..., "ticket_id":..., "chat_type":...}}
+SUDO_IDS = [7035704703]
+PENDING_TICKETS = {}
+PENDING_ADMIN_REPLY = {}
 CLOSED_TICKETS = set()
 REMINDER_DELAY_MINUTES = 10
 
@@ -23,6 +23,9 @@ async def support_panel(client: Client, message: Message):
                 InlineKeyboardButton("📝 Öneri", callback_data="ticket_type_suggestion"),
                 InlineKeyboardButton("❌ Hata", callback_data="ticket_type_bug"),
                 InlineKeyboardButton("💡 Genel Sorun", callback_data="ticket_type_issue")
+            ],
+            [
+                InlineKeyboardButton("❌ Talep İptal", callback_data="cancel_request")
             ]
         ]
     )
@@ -46,11 +49,16 @@ async def select_ticket_type(client: Client, callback_query: CallbackQuery):
         return
 
     ticket_id = random.randint(1000, 9999)
-    chat_type = callback_query.message.chat.id if callback_query.message.chat.type != "private" else "Özel"
-    PENDING_TICKETS[user_id] = {"ticket_id": ticket_id, "type": ticket_type, "chat_type": chat_type}
+    PENDING_TICKETS[user_id] = {
+        "ticket_id": ticket_id,
+        "type": ticket_type,
+        "chat_type": "private" if callback_query.message.chat.type == "private" else callback_query.message.chat.id,
+        "message_ids": []
+    }
 
     await callback_query.message.reply_text(
-        f"📝 Talep ID: `{ticket_id}`\nLütfen mesajınızı yazınız:",
+        f"📝 Talep ID: `{ticket_id}`\nLütfen talebinizi yazın veya foto/video/dosya gönderin.\n"
+        f"İptal etmek için /iptal yazabilirsiniz.",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -60,7 +68,7 @@ async def select_ticket_type(client: Client, callback_query: CallbackQuery):
 @app.on_message(
     (filters.private | filters.group) &
     ~filters.user(SUDO_IDS) &
-    (filters.text | filters.photo | filters.document | filters.audio)
+    (filters.text | filters.photo | filters.document | filters.audio | filters.video)
 )
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
@@ -71,69 +79,90 @@ async def receive_ticket(client: Client, message: Message):
     ticket_id = info["ticket_id"]
     ticket_type = info["type"]
     chat_type = info["chat_type"]
-    user_mention = message.from_user.mention
-    user_msg = message.text if message.text else f"Medya gönderildi: {message.media.value}"
 
+    # Mesaj içeriği
+    if message.text:
+        content = message.text
+    elif message.photo:
+        content = "Fotoğraf gönderildi"
+    elif message.video:
+        content = "Video gönderildi"
+    elif message.audio:
+        content = "Ses dosyası gönderildi"
+    elif message.document:
+        content = f"Dosya gönderildi: {message.document.file_name}"
+    else:
+        content = "Medya gönderildi"
+
+    if message.caption:
+        content += f"\n📎 Altına yazılan: {message.caption}"
+
+    # Kullanıcıya onay
+    await message.reply_text(
+        f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`\nEn kısa sürede dönüş sağlanacaktır.",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+    # Log oluştur
     log_text = (
         f"📩 **Yeni Talep!**\n"
+        f"Talep türü: **{ticket_type.capitalize()}**\n"
         f"Talep ID: `{ticket_id}`\n"
-        f"Talep türü: `{ticket_type}`\n"
-        f"Talep eden: {user_mention}\n"
-        f"Mesaj: {user_msg}\n"
-        f"Yazıldığı yer: {chat_type if chat_type != 'Özel' else 'Özel'}"
+        f"Talep eden: {message.from_user.mention}\n"
+        f"Yazıldığı yer: {'Özel' if chat_type == 'private' else 'Grup'}\n"
+        f"Mesaj: {content}"
     )
 
     # Butonlar
     buttons = []
-    if message.chat.type == "private":
-        profile_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else None
-        if profile_url:
-            buttons.append([InlineKeyboardButton("👤 Profil", url=profile_url)])
-        buttons.append([InlineKeyboardButton("💬 Bot üzerinden yanıtla", callback_data=f"reply_{ticket_id}")])
-        buttons.append([InlineKeyboardButton("❌ İptal", callback_data=f"cancel_{ticket_id}")])
-    else:
+    if chat_type != 'private':
         msg_link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
-        buttons.append([InlineKeyboardButton("📄 Mesaja git", url=msg_link)])
-        profile_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else None
-        if profile_url:
-            buttons.append([InlineKeyboardButton("👤 Kullanıcıya git", url=profile_url)])
-        buttons.append([InlineKeyboardButton("💬 Bot üzerinden yanıtla", callback_data=f"reply_{ticket_id}")])
-        buttons.append([InlineKeyboardButton("❌ İptal", callback_data=f"cancel_{ticket_id}")])
-
+        buttons.append([InlineKeyboardButton("📄 Mesaja Git", url=msg_link)])
+    profile_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else None
+    if profile_url:
+        buttons.append([InlineKeyboardButton("👤 Kullanıcıya Git", url=profile_url)])
+    buttons.append([InlineKeyboardButton("💬 Bot Üzerinden Yanıtla", callback_data=f"reply_{ticket_id}")])
+    buttons.append([InlineKeyboardButton("❌ Talep İptal", callback_data=f"cancel_{ticket_id}")])
     keyboard = InlineKeyboardMarkup(buttons)
 
-    # Gönder
+    # Log ve sudo'ya gönder
     await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     for sudo_id in SUDO_IDS:
         await client.send_message(sudo_id, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
-    # Kullanıcıya onay
-    await message.reply_text(f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`", parse_mode=ParseMode.MARKDOWN)
-
-    del PENDING_TICKETS[user_id]
+    # Talep tamamlandı
+    PENDING_TICKETS[user_id]["message_ids"].append(message.id)
 
 # -------------------------
-# İptal butonu
+# Talep iptal
 # -------------------------
-@app.on_callback_query(filters.regex(r"cancel_\d+"))
+@app.on_callback_query(filters.regex(r"cancel_\d+|cancel_request"))
 async def cancel_ticket(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    if callback_query.data == "cancel_request":
+        if user_id in PENDING_TICKETS:
+            del PENDING_TICKETS[user_id]
+            await callback_query.answer("❌ Talep iptal edildi.", show_alert=True)
+        else:
+            await callback_query.answer("❌ Talep bulunamadı.", show_alert=True)
+        return
+
     ticket_id = int(callback_query.data.split("_")[1])
-    user_id = None
+    target_user = None
     for uid, info in PENDING_TICKETS.items():
         if info["ticket_id"] == ticket_id:
-            user_id = uid
+            target_user = uid
             break
-    if user_id:
-        del PENDING_TICKETS[user_id]
+    if target_user:
+        del PENDING_TICKETS[target_user]
         await callback_query.answer("❌ Talep iptal edildi.", show_alert=True)
-        await callback_query.message.edit_reply_markup(None)
     else:
-        await callback_query.answer("❌ Bu talep bulunamadı veya zaten iptal edilmiş.", show_alert=True)
+        await callback_query.answer("❌ Bu talep zaten iptal edilmiş.", show_alert=True)
 
 # -------------------------
-# Sudo Bot üzerinden yanıtla
+# Sudo bot üzerinden yanıtla
 # -------------------------
-@app.on_callback_query(filters.regex(r"^reply_(\d+)$"))
+@app.on_callback_query(filters.regex(r"reply_(\d+)"))
 async def reply_ticket(client: Client, callback_query: CallbackQuery):
     sudo_id = callback_query.from_user.id
     if sudo_id not in SUDO_IDS:
@@ -141,9 +170,58 @@ async def reply_ticket(client: Client, callback_query: CallbackQuery):
         return
 
     ticket_id = int(callback_query.matches[0].group(1))
-    # Talep sahibini bul
     target_user = None
     chat_type = None
+    for uid, info in PENDING_TICKETS.items():
+        if info["ticket_id"] == ticket_id:
+            target_user = uid
+            chat_type = info["chat_type"]
+            break
+    if not target_user:
+        await callback_query.answer("❌ Talep bulunamadı.", show_alert=True)
+        return
+
+    PENDING_ADMIN_REPLY[sudo_id] = {"target_user": target_user, "ticket_id": ticket_id, "chat_type": chat_type}
+    await callback_query.answer("✍️ Yanıtınızı yazın, kullanıcıya iletilecek.", show_alert=True)
+
+# -------------------------
+# Sudo yanıt mesajı
+# -------------------------
+@app.on_message(filters.text & filters.user(SUDO_IDS))
+async def handle_sudo_reply(client: Client, message: Message):
+    sudo_id = message.from_user.id
+    if sudo_id not in PENDING_ADMIN_REPLY:
+        return
+
+    info = PENDING_ADMIN_REPLY.pop(sudo_id)
+    target_user = info["target_user"]
+    ticket_id = info["ticket_id"]
+    chat_type = info["chat_type"]
+
+    if message.text.lower() == "/iptal":
+        await message.reply_text("❌ Yanıt iptal edildi.")
+        return
+
+    try:
+        if chat_type == "private":
+            await client.send_message(
+                target_user,
+                f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`):**\n\n{message.text}"
+            )
+        else:
+            user_mention = f"[{target_user}](tg://user?id={target_user})"
+            await client.send_message(
+                chat_type,
+                f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`)**\n{user_mention}, {message.text}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        await message.reply_text(
+            "✅ Yanıt başarıyla iletildi.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Talebi Kapat", callback_data=f"close_ticket:{ticket_id}")]])
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Kullanıcıya iletilemedi: {e}")    chat_type = None
     for uid, info in PENDING_TICKETS.items():
         if info["ticket_id"] == ticket_id:
             target_user = uid

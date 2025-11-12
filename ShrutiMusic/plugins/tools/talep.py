@@ -1,12 +1,16 @@
+import asyncio
+import random
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 from pyrogram.enums import ParseMode
 from ShrutiMusic import app
-import random
 
 LOG_GROUP_ID = -1002663919856
-SUDO_IDS = [7035704703]  # Sudo kullanıcı listesi
-PENDING_TICKETS = {}      # {user_id: {"ticket_id":..., "chat_type":...}}
+SUDO_IDS = [7035704703]  # Başlangıç Sudo
+PENDING_TICKETS = {}      # {user_id: {"ticket_id":..., "type":..., "chat_type":...}}
+PENDING_ADMIN_REPLY = {}  # {sudo_id: {"target_user":..., "ticket_id":..., "chat_type":...}}
+CLOSED_TICKETS = set()
+REMINDER_DELAY_MINUTES = 10
 
 # -------------------------
 # Destek paneli
@@ -42,7 +46,7 @@ async def select_ticket_type(client: Client, callback_query: CallbackQuery):
         return
 
     ticket_id = random.randint(1000, 9999)
-    chat_type = "Özel" if callback_query.message.chat.type == "private" else callback_query.message.chat.title
+    chat_type = callback_query.message.chat.id if callback_query.message.chat.type != "private" else "Özel"
     PENDING_TICKETS[user_id] = {"ticket_id": ticket_id, "type": ticket_type, "chat_type": chat_type}
 
     await callback_query.message.reply_text(
@@ -54,7 +58,7 @@ async def select_ticket_type(client: Client, callback_query: CallbackQuery):
 # Talep mesajını alma
 # -------------------------
 @app.on_message(
-    filters.private | filters.group &
+    (filters.private | filters.group) &
     ~filters.user(SUDO_IDS) &
     (filters.text | filters.photo | filters.document | filters.audio)
 )
@@ -76,7 +80,7 @@ async def receive_ticket(client: Client, message: Message):
         f"Talep türü: `{ticket_type}`\n"
         f"Talep eden: {user_mention}\n"
         f"Mesaj: {user_msg}\n"
-        f"Yazıldığı yer: {chat_type}"
+        f"Yazıldığı yer: {chat_type if chat_type != 'Özel' else 'Özel'}"
     )
 
     # Butonlar
@@ -106,7 +110,6 @@ async def receive_ticket(client: Client, message: Message):
     # Kullanıcıya onay
     await message.reply_text(f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`", parse_mode=ParseMode.MARKDOWN)
 
-    # Talep tamamlandı
     del PENDING_TICKETS[user_id]
 
 # -------------------------
@@ -115,7 +118,6 @@ async def receive_ticket(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"cancel_\d+"))
 async def cancel_ticket(client: Client, callback_query: CallbackQuery):
     ticket_id = int(callback_query.data.split("_")[1])
-    # Kullanıcı ID'yi bul
     user_id = None
     for uid, info in PENDING_TICKETS.items():
         if info["ticket_id"] == ticket_id:
@@ -129,47 +131,35 @@ async def cancel_ticket(client: Client, callback_query: CallbackQuery):
         await callback_query.answer("❌ Bu talep bulunamadı veya zaten iptal edilmiş.", show_alert=True)
 
 # -------------------------
-# Bot üzerinden yanıtla (sadece Sudo)
+# Sudo Bot üzerinden yanıtla
 # -------------------------
-@app.on_callback_query(filters.regex(r"reply_\d+"))
+@app.on_callback_query(filters.regex(r"^reply_(\d+)$"))
 async def reply_ticket(client: Client, callback_query: CallbackQuery):
-    ticket_id = int(callback_query.data.split("_")[1])
-    await callback_query.answer(f"💬 Talep ID {ticket_id} için yanıt verebilirsiniz.", show_alert=True)        f"✅ Talebiniz alınmıştır. Talep ID: `{ticket_id}`\nKategori: **{category}**\nEn kısa sürede dönüş sağlanacaktır.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-    PENDING_TICKETS[user_id]["message_id"] = message.id
-    asyncio.create_task(start_ticket_reminder(client, user_id, ticket_id))
-
-# ==========================
-# Talep iptal
-# ==========================
-@app.on_callback_query(filters.regex(r"^cancel_ticket:(\d+)$"))
-async def cancel_ticket(client: Client, callback_query: CallbackQuery):
-    user_id = int(callback_query.matches[0].group(1))
-    if user_id in PENDING_TICKETS:
-        del PENDING_TICKETS[user_id]
-        await callback_query.edit_message_text("❌ Talep iptal edildi.")
-        try:
-            await client.send_message(user_id, "❌ Destek talebiniz iptal edildi.")
-        except:
-            pass
-    else:
-        await callback_query.answer("❌ Bu talep zaten kapatılmış.", show_alert=True)
-
-# ==========================
-# Sudo Bot Üzerinden Cevap
-# ==========================
-@app.on_callback_query(filters.regex(r"^admin_reply:(\d+):(\d+)$"))
-async def admin_reply_callback(client: Client, callback_query: CallbackQuery):
     sudo_id = callback_query.from_user.id
-    user_id = int(callback_query.matches[0].group(1))
-    ticket_id = int(callback_query.matches[0].group(2))
+    if sudo_id not in SUDO_IDS:
+        await callback_query.answer("❌ Yetkiniz yok.", show_alert=True)
+        return
 
-    PENDING_ADMIN_REPLY[sudo_id] = {"target_user": user_id, "ticket_id": ticket_id}
-    await callback_query.answer("✍️ Mesajınızı yazın, kullanıcıya iletilecek.", show_alert=True)
-    await client.send_message(sudo_id, f"💬 Talep `{ticket_id}` için cevap yazın. İptal için /iptal.")
+    ticket_id = int(callback_query.matches[0].group(1))
+    # Talep sahibini bul
+    target_user = None
+    chat_type = None
+    for uid, info in PENDING_TICKETS.items():
+        if info["ticket_id"] == ticket_id:
+            target_user = uid
+            chat_type = info["chat_type"]
+            break
 
+    if not target_user:
+        await callback_query.answer("❌ Bu talep bulunamadı.", show_alert=True)
+        return
+
+    PENDING_ADMIN_REPLY[sudo_id] = {"target_user": target_user, "ticket_id": ticket_id, "chat_type": chat_type}
+    await callback_query.answer("✍️ Lütfen yanıtınızı yazın, kullanıcıya iletilecek.", show_alert=True)
+
+# -------------------------
+# Sudo yanıtı mesajı
+# -------------------------
 @app.on_message(filters.text & filters.user(SUDO_IDS))
 async def handle_sudo_reply(client: Client, message: Message):
     sudo_id = message.from_user.id
@@ -179,22 +169,36 @@ async def handle_sudo_reply(client: Client, message: Message):
     info = PENDING_ADMIN_REPLY.pop(sudo_id)
     target_user = info["target_user"]
     ticket_id = info["ticket_id"]
+    chat_type = info["chat_type"]
 
     if message.text.lower() == "/iptal":
         await message.reply_text("❌ Yanıt iptal edildi.")
         return
 
     try:
-        await client.send_message(target_user, f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`):**\n\n{message.text}")
-        await message.reply_text("✅ Mesaj kullanıcıya iletildi.", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Talebi Kapat", callback_data=f"close_ticket:{ticket_id}")]
-        ]))
+        if chat_type == "Özel":
+            await client.send_message(
+                target_user,
+                f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`):**\n\n{message.text}"
+            )
+        else:
+            user_mention = f"[{target_user}](tg://user?id={target_user})"
+            await client.send_message(
+                chat_type,
+                f"📬 **Destek Ekibinden Cevap (Talep ID: `{ticket_id}`)**\n{user_mention}, {message.text}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        await message.reply_text(
+            "✅ Yanıt başarıyla iletildi.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Talebi Kapat", callback_data=f"close_ticket:{ticket_id}")]])
+        )
     except Exception as e:
         await message.reply_text(f"❌ Kullanıcıya iletilemedi: {e}")
 
-# ==========================
+# -------------------------
 # Talep kapatma
-# ==========================
+# -------------------------
 @app.on_callback_query(filters.regex(r"^close_ticket:(\d+)$"))
 async def close_ticket(client: Client, callback_query: CallbackQuery):
     ticket_id = int(callback_query.matches[0].group(1))
@@ -202,25 +206,29 @@ async def close_ticket(client: Client, callback_query: CallbackQuery):
     await callback_query.edit_message_text(f"✅ Talep Kapatıldı\nTalep ID: `{ticket_id}`")
     await callback_query.answer("Talep başarıyla kapatıldı ✅", show_alert=True)
 
-# ==========================
+# -------------------------
 # Hatırlatma sistemi
-# ==========================
+# -------------------------
 async def start_ticket_reminder(client: Client, user_id: int, ticket_id: int):
     while True:
         await asyncio.sleep(REMINDER_DELAY_MINUTES * 60)
         if user_id in PENDING_TICKETS and PENDING_TICKETS[user_id]["ticket_id"] == ticket_id:
             try:
-                await client.send_message(user_id, f"⏰ Talep ID: `{ticket_id}` için henüz cevap gelmedi. En kısa sürede destek ekibimiz dönüş yapacaktır.")
+                await client.send_message(user_id, f"⏰ Talep ID: `{ticket_id}` için henüz cevap gelmedi.")
             except:
                 pass
             for sudo_id in SUDO_IDS:
-                await client.send_message(sudo_id, f"⏰ Talep ID: `{ticket_id}` henüz yanıtlanmadı. Kullanıcı: [{user_id}](tg://user?id={user_id})", parse_mode=ParseMode.MARKDOWN)
+                await client.send_message(
+                    sudo_id,
+                    f"⏰ Talep ID: `{ticket_id}` henüz yanıtlanmadı. Kullanıcı: [{user_id}](tg://user?id={user_id})",
+                    parse_mode=ParseMode.MARKDOWN
+                )
         else:
             break
 
-# ==========================
+# -------------------------
 # /sudover komutu
-# ==========================
+# -------------------------
 @app.on_message(filters.command("sudover") & filters.user(SUDO_IDS[0]))
 async def manage_sudo(client: Client, message: Message):
     args = message.text.split()
@@ -236,7 +244,6 @@ async def manage_sudo(client: Client, message: Message):
         return
 
     global SUDO_IDS
-
     if action in ["ekle", "add"]:
         if user_id not in SUDO_IDS:
             SUDO_IDS.append(user_id)
@@ -252,9 +259,9 @@ async def manage_sudo(client: Client, message: Message):
     else:
         await message.reply_text("❌ Geçersiz işlem. Kullanım: /sudover <ekle/remove> <user_id>")
 
-# ==========================
+# -------------------------
 # /hatirlama komutu
-# ==========================
+# -------------------------
 @app.on_message(filters.command("hatirlama") & filters.user(SUDO_IDS[0]))
 async def set_reminder_time(client: Client, message: Message):
     try:

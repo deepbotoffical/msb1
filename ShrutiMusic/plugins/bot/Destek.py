@@ -69,13 +69,25 @@ async def receive_ticket(client: Client, message: Message):
         f"Yazıldığı yer: {chat_type}"
     )
 
-    # Buton: özelden veya gruptan yazılmışa göre
+    # ==============================
+    # Güvenli buton link oluşturma
+    # ==============================
     if message.chat.type == "private":
-        btn_url = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
+        if message.from_user.username:
+            # Kullanıcının kullanıcı adı varsa doğrudan profiline git
+            btn_url = f"https://t.me/{message.from_user.username}"
+        else:
+            # Kullanıcının kullanıcı adı yoksa link gösterme (sadece bilgi butonu)
+            btn_url = None
     else:
+        # Grup veya kanal mesajı için
         btn_url = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yanıtla", url=btn_url)]])
+    # Buton oluştur
+    if btn_url:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yanıtla", url=btn_url)]])
+    else:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yanıtla", callback_data="no_link")]])
 
     # Log grubuna ve sudo'ya gönder
     await client.send_message(LOG_GROUP_ID, log_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
@@ -89,3 +101,14 @@ async def receive_ticket(client: Client, message: Message):
 
     # Talep tamamlandı → kayıt sil
     del PENDING_TICKETS[user_id]
+
+
+# ==========================
+# Username olmayanlar için uyarı
+# ==========================
+@app.on_callback_query(filters.regex("no_link"))
+async def no_link_warning(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer(
+        "❗ Bu kullanıcıya doğrudan bağlantı bulunamadı (kullanıcı adı yok).",
+        show_alert=True
+    )

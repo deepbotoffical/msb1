@@ -47,14 +47,11 @@ async def open_ticket(client: Client, callback_query: CallbackQuery):
     )
 
 # ==========================
-# Kullanıcının mesajını alma (hem özel hem grup)
+# Kullanıcının mesajını alma (sadece aktif talebi olanlar)
 # ==========================
-@app.on_message(filters.text)
+@app.on_message(filters.text & filters.create(lambda _, __, msg: msg.from_user.id in PENDING_TICKETS))
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
-    if user_id not in PENDING_TICKETS:
-        return  # Talep yoksa çık
-
     ticket_id = PENDING_TICKETS[user_id]
     user_msg = message.text
     user_mention = message.from_user.mention
@@ -74,13 +71,10 @@ async def receive_ticket(client: Client, message: Message):
     # ==============================
     if message.chat.type == "private":
         if message.from_user.username:
-            # Kullanıcının kullanıcı adı varsa doğrudan profiline git
             btn_url = f"https://t.me/{message.from_user.username}"
         else:
-            # Kullanıcının kullanıcı adı yoksa link gösterme (sadece bilgi butonu)
             btn_url = None
     else:
-        # Grup veya kanal mesajı için
         btn_url = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
 
     # Buton oluştur
@@ -101,7 +95,6 @@ async def receive_ticket(client: Client, message: Message):
 
     # Talep tamamlandı → kayıt sil
     del PENDING_TICKETS[user_id]
-
 
 # ==========================
 # Username olmayanlar için uyarı

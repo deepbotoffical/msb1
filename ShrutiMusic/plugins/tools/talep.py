@@ -3,243 +3,374 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, 
 from pyrogram.enums import ParseMode
 from ShrutiMusic import app
 import random
-from datetime import datetime
+from  datetime import datetime
+import asyncio
+import time
 
-# Lütfen bu değerleri kendi bot ve grup ID'lerinizle değiştirin
-# Loglara gönderilen mesajların düzgün çalışması için LOG_GROUP_ID'nin mutlaka doğru olması gerekir.
-LOG_GROUP_ID = -1002663919856  # Logların gönderileceği grup ID'si
-SUDO_ID = 7035704703          # Yönetici (Sudo) kullanıcının ID'si
+# --- EKLENTİ AYARLARI ---
+# Destek taleplerini yönetecek yöneticinin (sudo) kullanıcı ID'si.
+# Botun tüm talepleri ileteceği özel sohbet ID'sidir.
+SUDO_ID = 7035704703  # LÜTFEN KENDİ TELEGRAM YÖNETİCİ ID'NİZLE DEĞİŞTİRİN!
 
-# {user_id: {"ticket_id":..., "type":..., "timestamp":...}}
-PENDING_TICKETS = {}
-SUDO_REPLY = {}  # {sudo_id: user_id}
+# Durum Yönetimi (Gerçek botlarda veritabanı kullanılmalıdır - Firestore, MongoDB vb.)
+# Bu sözlük, aktif taleplerin durumunu ve etkileşim mesajlarının ID'lerini tutar.
+# Bot yeniden başlatılırsa bu veriler KAYBOLUR.
+request_states = {}
+request_counter = 0
 
-# ==========================
-# /destek komutu: Destek panelini açar
-@app.on_message(filters.command("destek"))
-async def destek_panel(client: Client, message: Message):
-    keyboard = InlineKeyboardMarkup(
+def generate_request_id():
+    """Basit ve benzersiz bir talep kimliği oluşturur."""
+    global request_counter
+    request_counter += 1
+    # Unix zaman damgası + sayaç ile benzersizlik garanti edilir
+    return f"REQ_{int(time.time())}_{request_counter}"
+
+# --- YARDIMCI FONKSİYONLAR ---
+
+def get_initial_keyboard():
+    """Ana menü için başlangıç klavyesini oluşturur."""
+    keyboard = [
         [
-            [
-                InlineKeyboardButton("📝 Öneri", callback_data="ticket_type_suggestion"),
-                InlineKeyboardButton("❌ Hata", callback_data="ticket_type_bug"),
-                InlineKeyboardButton("💡 Genel Sorun", callback_data="ticket_type_issue")
-            ]
-        ]
-    )
-    await message.reply_text(
-        "🎧 **DEEPMusic Destek Paneli**\n\n"
-        "Lütfen talep türünüzü seçin:",
-        reply_markup=keyboard
-    )
+            types.InlineKeyboardButton("Öneri", callback_data="select_type|Öneri"),
+            types.InlineKeyboardButton("Şikayet", callback_data="select_type|Şikayet"),
+        ],
+        [
+            types.InlineKeyboardButton("Sorun/Hata", callback_data="select_type|Sorun/Hata"),
+        ],
+        [
+            types.InlineKeyboardButton("Talep İptal", callback_data="cancel_request"),
+        ],
+    ]
+    return types.InlineKeyboardMarkup(keyboard)
 
+def get_awaiting_message_keyboard():
+    """Kullanıcının mesajı beklenirken gösterilen klavye."""
+    keyboard = [
+        [
+            types.InlineKeyboardButton("Talep İptal", callback_data="cancel_request"),
+        ],
+    ]
+    return types.InlineKeyboardMarkup(keyboard)
 
-# ==========================
-# Talep türü seçildi: Kullanıcıyı mesaj göndermeye hazırlar
-@app.on_callback_query(filters.regex(r"ticket_type_(suggestion|bug|issue)"))
-async def select_ticket_type(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    ticket_type = callback_query.data.split("_")[2]
+def get_sudo_notification_keyboard(request_id, is_group):
+    """Sudo'ya gönderilen ilk bildirim için klavye."""
+    # Profiline Git veya Gruptaki Mesaja Git butonu
+    profile_button_text = "Gruptaki Mesaja Git" if is_group else "Kullanıcı Profili"
+    # NOT: Gerçek butonda 'url' parametresi veya bir yönlendirme mekanizması kullanılır.
+    profile_callback = f"sudo_navigate|{request_id}" 
+    
+    keyboard = [
+        [
+            types.InlineKeyboardButton(profile_button_text, callback_data=profile_callback),
+        ],
+        [
+            types.InlineKeyboardButton("Talebi Göster", callback_data=f"sudo_show|{request_id}"),
+            types.InlineKeyboardButton("Talep İptal", callback_data=f"sudo_cancel|{request_id}"),
+        ],
+    ]
+    return types.InlineKeyboardMarkup(keyboard)
 
-    # Zaten devam eden bir talep varsa uyarı ver.
-    if user_id in PENDING_TICKETS:
-        # Önceki mesajı düzeltmek yerine yeni bir mesajla durumu bildir
-        await callback_query.message.reply_text("📌 Zaten bir talep gönderme süreciniz açık. Lütfen mesajınızı gönderin veya iptal edin.")
-        return
+def get_sudo_review_keyboard(request_id):
+    """Sudo'ya tam talep gösterilirken kullanılan klavye."""
+    keyboard = [
+        [
+            types.InlineKeyboardButton("Bot Üzerinden Yanıtla", callback_data=f"sudo_reply_init|{request_id}"),
+            types.InlineKeyboardButton("Talep İptal", callback_data=f"sudo_cancel|{request_id}"),
+        ],
+    ]
+    return types.InlineKeyboardMarkup(keyboard)
 
-    ticket_id = random.randint(1000, 9999)
-    PENDING_TICKETS[user_id] = {
-        "ticket_id": ticket_id,
-        "type": ticket_type,
-        "timestamp": datetime.now()
+# --- PYROGRAM HANDLERS ---
+
+# 1. /destek Komutu
+@Client.on_message(filters.command("destek") & filters.private | filters.command("destek") & filters.group)
+async def start_support(client: Client, message: types.Message):
+    """Kullanıcı /destek yazdığında ana menüyü gönderir."""
+    
+    # Eğer kullanıcının aktif bir talebi varsa, tekrar başlatmayı engelle.
+    for req_id, req_data in request_states.items():
+        if req_data.get('user_id') == message.from_user.id and req_data.get('status') not in ['REPLIED', 'CANCELLED']:
+            await message.reply_text(
+                "Zaten aktif bir destek talebiniz mevcut. Lütfen mevcut talebinizin sonucunu bekleyin."
+            )
+            return
+
+    text = "Deep Music destek kanalı ve lütfen talep türünüzü seçin."
+    keyboard = get_initial_keyboard()
+    
+    # İlk mesajı gönder ve ID'sini sakla
+    sent_message = await message.reply_text(text, reply_markup=keyboard, quote=True)
+
+    # Geçici bir talep oluşturulur
+    req_id = generate_request_id()
+    request_states[req_id] = {
+        'id': req_id,
+        'user_id': message.from_user.id,        # Kullanıcının ID'si (PM göndermek için kullanılır)
+        'chat_id': message.chat.id,             # Orijinal sohbet ID'si (Grup veya PM)
+        'message_id': sent_message.id,          # Botun etkileşim mesajı ID'si
+        'status': 'AWAITING_TYPE', 
     }
     
-    # İptal butonu içeren klavye
-    cancel_keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("❌ Talep İptal", callback_data="ticket_cancel")
-            ]
-        ]
-    )
-    
-    # Kullanıcıya bir sonraki adımı bildir (İptal butonu eklendi)
-    await callback_query.edit_message_text(
-        f"📝 Talep ID: `{ticket_id}`\n"
-        f"Talep Türü: **{ticket_type.capitalize()}**\n\n"
-        f"**Lütfen şimdi tek bir mesajla (metin veya medya) talebinizi yazın ve gönderin.**\n"
-        f"İptal etmek için `/iptal` yazabilir veya aşağıdaki butonu kullanabilirsiniz.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=cancel_keyboard
-    )
-    await callback_query.answer("Talep oluşturma süreci başladı. Lütfen mesajınızı gönderin.")
+    print(f"[{req_id}] Yeni destek oturumu başlatıldı. Durum: AWAITING_TYPE")
 
 
-# ==========================
-# Kullanıcıdan Talep İptali (Buton ile)
-@app.on_callback_query(filters.regex("ticket_cancel"))
-async def cancel_pending_ticket_callback(client: Client, callback_query: CallbackQuery):
+# 2. Callback Query İşleyicisi
+@Client.on_callback_query()
+async def support_callback_handler(client: Client, callback_query: types.CallbackQuery):
+    data = callback_query.data
     user_id = callback_query.from_user.id
+    message = callback_query.message
     
-    if user_id in PENDING_TICKETS:
-        # PENDING_TICKETS'ten kullanıcıyı kaldır
-        PENDING_TICKETS.pop(user_id, None)
+    # 2.1 Talep Tipi Seçimi (select_type|Öneri)
+    if data.startswith("select_type|"):
+        _, req_type = data.split("|")
         
-        # Mesajı güncelle
-        await callback_query.edit_message_text(
-            "❌ Talep gönderme işlemi başarıyla iptal edildi.",
-            reply_markup=None
+        # Talep ID'sini bul
+        req_id = next((k for k, v in request_states.items() if v.get('message_id') == message.id), None)
+        
+        if not req_id or request_states[req_id].get('user_id') != user_id or request_states[req_id].get('status') != 'AWAITING_TYPE':
+            await callback_query.answer("Bu etkileşim süresi dolmuş veya size ait değil.", show_alert=True)
+            return
+
+        # Durumu güncelle: Talep tipi seçildi, mesaj bekleniyor
+        request_states[req_id]['request_type'] = req_type
+        request_states[req_id]['status'] = 'AWAITING_MESSAGE'
+        
+        text = f"Lütfen **{req_type}** talebinizi gönderin:"
+        keyboard = get_awaiting_message_keyboard()
+        
+        await message.edit_text(text, reply_markup=keyboard)
+        await callback_query.answer(f"Talep türü: {req_type} olarak ayarlandı.", show_alert=False)
+        
+        print(f"[{req_id}] Talep tipi seçildi: {req_type}. Durum: AWAITING_MESSAGE")
+        
+        
+    # 2.2 Talep İptali (cancel_request, sudo_cancel)
+    elif data.endswith("cancel_request") or data.startswith("sudo_cancel|"):
+        
+        req_id = None
+        
+        # Kullanıcı tarafı iptal (message.id ile talep ID'sini buluruz)
+        if data == "cancel_request":
+            req_id = next((k for k, v in request_states.items() if v.get('message_id') == message.id), None)
+            
+            if not req_id or request_states[req_id].get('user_id') != user_id:
+                await callback_query.answer("Bu etkileşim size ait değil.", show_alert=True)
+                return
+                
+            # Durum sadece CANCELLED olarak işaretlenir
+            request_states[req_id]['status'] = 'CANCELLED'
+            await message.edit_text("✅ Destek talebi başarıyla iptal edildi.", reply_markup=None)
+            await callback_query.answer("Talep iptal edildi.", show_alert=False)
+            print(f"[{req_id}] Kullanıcı tarafından iptal edildi.")
+
+        # Sudo tarafı iptal (callback verisinden talep ID'sini çekeriz)
+        elif data.startswith("sudo_cancel|"):
+            _, req_id = data.split("|")
+            
+            if req_id not in request_states or user_id != SUDO_ID:
+                await callback_query.answer("Bu talep bulunamadı veya size ait değil.", show_alert=True)
+                return
+            
+            req_data = request_states[req_id]
+            
+            # Kullanıcıya iptal bilgisini gönder (user_id = PM chat id)
+            await client.send_message(
+                req_data['user_id'], # Kullanıcının PM ID'si
+                "❌ **Önemli:** Sudo tarafından destek talebiniz iptal edilmiştir."
+            )
+            
+            # Sudo'nun etkileşim mesajını güncelle
+            await message.edit_text(
+                f"❌ **Talep İptal Edildi**\n\nTalep Türü: {req_data.get('request_type', 'Bilinmiyor')}\nTalep Eden ID: `{req_data['user_id']}`",
+                reply_markup=None
+            )
+            
+            # Durumu güncelleyerek kaldır
+            req_data['status'] = 'CANCELLED'
+
+            await callback_query.answer("Talep başarıyla iptal edildi ve kullanıcıya bildirildi.", show_alert=True)
+            print(f"[{req_id}] Sudo tarafından iptal edildi.")
+            
+            
+    # 2.3 Sudo - Talebi Göster (sudo_show)
+    elif data.startswith("sudo_show|"):
+        _, req_id = data.split("|")
+        
+        if req_id not in request_states or user_id != SUDO_ID:
+            await callback_query.answer("Bu talep bulunamadı veya yetkiniz yok.", show_alert=True)
+            return
+
+        req_data = request_states[req_id]
+        
+        # A. Kullanıcıya bildirim gönder (Talebiniz incelemeye alınmıştır)
+        try:
+            await client.send_message(
+                chat_id=req_data['user_id'], # Kullanıcının PM ID'si
+                text="ℹ️ **Talebiniz incelemeye alınmıştır.** En kısa sürede yanıtlanacaktır."
+            )
+        except Exception as e:
+            print(f"Kullanıcıya 'incelemede' bildirimi gönderilemedi: {e}")
+            
+        # B. Sudo'nun etkileşim mesajını (bildirimi) düzenle
+        await message.edit_text(
+            f"✅ **Talep İncelemede**\n\n"
+            f"Talep Türü: **{req_data['request_type']}**\n"
+            f"Talep Eden ID: `{req_data['user_id']}`\n"
+            f"Talep Edilen Saat: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+            reply_markup=None # İlk bildirimin butonları kaldırıldı
         )
-        await callback_query.answer("Talep iptal edildi.")
-    else:
-        # Zaten iptal edilmiş veya hiç açılmamışsa uyarı ver
-        await callback_query.answer("Zaten aktif bir talep gönderme süreciniz yoktu.", show_alert=True)
+        
+        # C. Sudo'ya tam talebi göster
+        review_text = (
+            f"**Talebi Yanıtla - {req_data['request_type']}**\n\n"
+            f"Kullanıcı ID: `{req_data['user_id']}`\n"
+            f"Talep Mesajı:\n"
+            "----------------------------------\n"
+            f"*{req_data['message_text']}*"
+        )
+        keyboard = get_sudo_review_keyboard(req_id)
+        
+        sent_review_msg = await client.send_message(
+            chat_id=user_id, # Sudo'nun özel sohbetine
+            text=review_text,
+            reply_markup=keyboard
+        )
+        
+        # Durumu güncelle
+        req_data['status'] = 'IN_REVIEW'
+        req_data['sudo_review_msg_id'] = sent_review_msg.id
+        await callback_query.answer("Talep incelemeye alındı.", show_alert=False)
+        print(f"[{req_id}] Sudo talebi incelemeye aldı. Durum: IN_REVIEW")
+
+        
+    # 2.4 Sudo - Bot Üzerinden Yanıtla (sudo_reply_init)
+    elif data.startswith("sudo_reply_init|"):
+        _, req_id = data.split("|")
+        
+        if req_id not in request_states or user_id != SUDO_ID:
+            await callback_query.answer("Bu talep bulunamadı veya yetkiniz yok.", show_alert=True)
+            return
+
+        req_data = request_states[req_id]
+        
+        # Sudo'nun etkileşim mesajını (tam talebin gösterildiği mesajı) düzenle
+        await message.edit_text(
+            f"📝 **{req_data['request_type']}** talebine yanıt bekleniyor.\n\n"
+            f"Lütfen **yanıtınızı bir sonraki mesajınızda doğrudan** bu sohbete yazın. (Bu mesaja cevap vermeyin.)",
+            reply_markup=None # Sadece metin bekleniyor
+        )
+
+        # Durumu güncelle: Sudo'dan mesaj bekleniyor
+        req_data['status'] = 'AWAITING_SUDO_RESPONSE'
+        # Bu mesajın ID'sini de saklayalım ki, yanıt geldiğinde düzenleyebilelim.
+        req_data['sudo_review_msg_id'] = message.id 
+        await callback_query.answer("Yanıtınız bekleniyor...", show_alert=False)
+        print(f"[{req_id}] Sudo yanıt yazmaya başladı. Durum: AWAITING_SUDO_RESPONSE")
+
+    # 2.5 Diğer Callback'ler (Profiline Git, Gruptaki Mesaja Git)
+    elif data.startswith("sudo_navigate|"):
+        # Burası bir URL veya gruptaki mesaj linki ile değiştirilmelidir.
+        await callback_query.answer("Yönlendirme bağlantısı için talep ID'si kaydedildi.", show_alert=True)
 
 
-# ==========================
-# Kullanıcı mesajı veya medyası: Talebi kesinleştirir ve loglar (Hata 3 Giderildi)
-# Sadece özel sohbetteki gelen mesajları dinler
-@app.on_message(filters.private & filters.incoming)
-async def receive_ticket(client: Client, message: Message):
+# 3. Mesaj İşleyicisi (Kullanıcı Mesajı ve Sudo Yanıtı)
+# Sadece özel sohbetlerdeki metin mesajlarını dinler.
+@Client.on_message(filters.text & filters.private) 
+async def process_user_and_sudo_message(client: Client, message: types.Message):
     user_id = message.from_user.id
     
-    # Kullanıcının aktif bir talep oluşturma sürecinde olup olmadığını kontrol et
-    if user_id not in PENDING_TICKETS:
-        return
+    # --- A. KULLANICI TALEP MESAJI YAKALAMA ---
+    
+    # Kullanıcının aktif bir 'mesaj bekleniyor' durumu var mı kontrol et
+    active_req_id = next((k for k, v in request_states.items() if v.get('user_id') == user_id and v.get('status') == 'AWAITING_MESSAGE'), None)
+    
+    if active_req_id:
+        req_data = request_states[active_req_id]
         
-    # Eğer gelen mesaj /iptal komutu ise bu fonksiyonda işlem yapma, diğer handlera bırak
-    if message.text and message.text.lower() == "/iptal":
-        return
-
-    # Talep mesajını aldık, şimdi kullanıcıyı PENDING_TICKETS'ten çıkarıyoruz.
-    # Bu, sonraki mesajların da talep olarak algılanmasını önler.
-    ticket_info = PENDING_TICKETS.pop(user_id)
-    
-    ticket_id = ticket_info["ticket_id"]
-    ticket_type = ticket_info["type"]
-    timestamp = ticket_info["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-    user_mention = message.from_user.mention
-
-    # Log ve Sudo kullanıcısı için butonlar
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("📩 Bot ile Yanıtla", callback_data=f"reply_{user_id}")]
-        ]
-    )
-
-    log_text = (
-        f"🎟️ **YENİ DESTEK TALEBİ**\n"
-        f"------------------------------\n"
-        f"🕓 Tarih: {timestamp}\n"
-        f"🆔 Kullanıcı ID: `{user_id}`\n"
-        f"👤 Kullanıcı: {user_mention}\n"
-        f"💡 Talep Türü: {ticket_type.capitalize()}\n"
-        f"Talep ID: `{ticket_id}`\n"
-        f"------------------------------\n"
-        f"💬 **TALEP İÇERİĞİ HEMEN AŞAĞIDAKİ MESAJDIR.**"
-    )
-    
-    # 1. Log grubuna özeti ve mesajı gönder
-    await client.send_message(LOG_GROUP_ID, log_text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
-    await message.copy(LOG_GROUP_ID) 
-
-    # 2. Sudo kullanıcısına (özel sohbetine) özeti ve mesajı gönder
-    await client.send_message(SUDO_ID, log_text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
-    await message.copy(SUDO_ID) 
-
-    # Kullanıcıya onay mesajı
-    await message.reply_text(
-        f"✅ Talep ID: `{ticket_id}` ile talebiniz alınmıştır.\n"
-        f"En kısa sürede size dönüş sağlanacaktır.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-# ==========================
-# Bot ile yanıtla: Sudo yanıt oturumunu başlatır
-@app.on_callback_query(filters.regex("^reply_") & filters.user(SUDO_ID))
-async def reply_with_bot(client: Client, callback_query: CallbackQuery):
-    user_id = int(callback_query.data.split("_")[1])
-    SUDO_REPLY[callback_query.from_user.id] = user_id
-    await callback_query.answer("Yanıt oturumu başlatıldı.")
-    await client.send_message(
-        callback_query.from_user.id,
-        f"✉️ Kullanıcıya (`{user_id}`) yanıtınızı yazın veya medya gönderin.\n"
-        f"**Birden fazla mesaj gönderebilirsiniz.** Oturumu bitirmek için `/iptal` yazın."
-    )
-
-
-# ==========================
-# Sudo yanıt gönderme: Yanıtı kullanıcıya iletir (Hata 2 Giderildi)
-# Sadece Sudo kullanıcısının özel sohbetindeki gelen, komut olmayan mesajları dinler
-@app.on_message(filters.private & filters.incoming & filters.user(SUDO_ID) & ~filters.command("iptal"))
-async def send_reply_to_user(client: Client, message: Message):
-    sudo_id = message.from_user.id
-    
-    if sudo_id not in SUDO_REPLY:
-        # Sudo kullanıcısı aktif bir yanıtlama oturumunda değil
-        return
-    
-    user_id = SUDO_REPLY[sudo_id]
-    
-    try:
-        # Yanıt mesajını kullanıcıya kopyala
-        await message.copy(user_id)
+        # Talep metnini kaydet
+        req_data['message_text'] = message.text
+        req_data['user_original_message_id'] = message.id
+        req_data['status'] = 'MESSAGE_SENT'
         
-        # Sadece ilk mesajda değil, her yanıtta imza mesajı göndermek gereksiz olabilir.
-        # İlk mesajın üzerine yanıt geldiğini belirtelim.
-        await message.reply_text("✅ Yanıt başarıyla kullanıcıya iletildi. (Devam edebilirsiniz)")
-        
-        # Yanıt gönderildiği bilgisini Log Grubuna da ilet
+        # 1. Kullanıcıya bildirim gönder: "Talebiniz alınmıştır"
         await client.send_message(
-            LOG_GROUP_ID,
-            f"✅ **Yanıt İletildi** (ID: `{user_id}`)\n"
-            f"Sudo: {message.from_user.mention}\n"
-            f"Yanıt Mesajı: (Hemen altta)",
-            parse_mode=ParseMode.MARKDOWN
+            chat_id=user_id,
+            text="✅ **Talebiniz alınmıştır.** En kısa sürede Sudo tarafından incelenecektir."
         )
-        await message.copy(LOG_GROUP_ID)
 
-    except Exception as e:
-        # Hata durumunda oturumu kapat ve Sudo'ya bildir
-        del SUDO_REPLY[sudo_id]
-        await message.reply_text(f"❌ Kullanıcıya yanıt gönderilemedi ve oturum kapatıldı.\nSebep: {e}")
-        # Log Grubuna da hatayı ilet
-        await client.send_message(
-            LOG_GROUP_ID,
-            f"❌ **HATA: Yanıt İletilemedi** (ID: `{user_id}`)\n"
-            f"Sudo: {message.from_user.mention}\n"
-            f"Sebep: {e}",
-            parse_mode=ParseMode.MARKDOWN
+        # 2. Sudo'ya bildirim gönder: "Bir talep var"
+        user_mention = message.from_user.mention or f"Kullanıcı (ID: `{user_id}`)"
+        is_group = req_data['chat_id'] != user_id # Gruptan mı geldi kontrolü
+        
+        notification_text = (
+            "🚨 **YENİ DESTEK TALEBİ VAR** 🚨\n\n"
+            f"Talep Türü: **{req_data['request_type']}**\n"
+            f"Talep Eden: {user_mention}\n"
+            f"Talep Eden ID: `{user_id}`\n"
+            f"Talep Edilen Saat: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}"
         )
         
-
-# ==========================
-# /iptal komutu: Hem kullanıcı hem de Sudo için tek bir handler
-@app.on_message(filters.command("iptal") & filters.private)
-async def handle_cancel(client: Client, message: Message):
-    user_id = message.from_user.id
-    
-    # Kullanıcı talep gönderme sürecini mi iptal ediyor?
-    if user_id in PENDING_TICKETS:
-        del PENDING_TICKETS[user_id]
-        await message.reply_text("❌ Talep gönderme işlemi iptal edildi.")
+        keyboard = get_sudo_notification_keyboard(active_req_id, is_group)
         
-    # Sudo kullanıcı yanıt oturumunu mu iptal ediyor?
-    elif user_id == SUDO_ID and user_id in SUDO_REPLY:
-        # Yanıt oturumunu kapat
-        user_being_replied = SUDO_REPLY.pop(user_id)
-        
-        # Log grubuna bilgi ver
-        await client.send_message(
-            LOG_GROUP_ID,
-            f"⛔️ **Yanıt Oturumu Kapatıldı.**\n"
-            f"Sudo: {message.from_user.mention}\n"
-            f"Kullanıcı ID: `{user_being_replied}`",
-            parse_mode=ParseMode.MARKDOWN
+        sudo_notif_msg = await client.send_message(
+            chat_id=SUDO_ID,
+            text=notification_text,
+            reply_markup=keyboard
         )
-        await message.reply_text("❌ Yanıtlama işlemi iptal edildi ve oturum kapatıldı.")
         
-    # Aktif bir işlem yoksa
-    else:
-        await message.reply_text("ℹ️ Aktif bir talep veya yanıt işlemi bulunmuyor.")
+        req_data['sudo_notif_msg_id'] = sudo_notif_msg.id
+        
+        # Kullanıcının ilk etkileşim mesajını sil (Talep tipinin seçildiği mesaj)
+        try:
+             await client.delete_messages(user_id, req_data['message_id'])
+        except:
+             pass # Silme yetkisi olmayabilir
+             
+        print(f"[{active_req_id}] Talep mesajı alındı. Durum: MESSAGE_SENT. Sudo'ya iletildi.")
+        return
+        
+    # --- B. SUDO YANIT MESAJI YAKALAMA ---
+    
+    # Sudo'nun aktif bir 'yanıt bekleniyor' durumu var mı kontrol et
+    if user_id == SUDO_ID:
+        active_req_id = next((k for k, v in request_states.items() if v.get('status') == 'AWAITING_SUDO_RESPONSE'), None)
+        
+        if active_req_id:
+            req_data = request_states[active_req_id]
+            sudo_response_text = message.text
+            
+            # 1. Kullanıcıya yanıtı ilet (user_id = PM chat id)
+            response_text = (
+                f"✅ **Sudo Yanıtı ({req_data['request_type']} Talebiniz İçin):**\n"
+                "----------------------------------\n"
+                f"{sudo_response_text}"
+            )
+            
+            await client.send_message(
+                chat_id=req_data['user_id'],
+                text=response_text
+            )
+            
+            # 2. Sudo'nun etkileşim mesajını (bekleniyor mesajını) güncelle
+            # NOT: Sudo'nun gönderdiği en son mesajın ID'si kullanılmalı.
+            await client.edit_message_text(
+                chat_id=user_id,
+                message_id=req_data['sudo_review_msg_id'],
+                text=f"✅ Yanıt başarıyla kullanıcıya iletilmiştir.\n\nYanıtınız:\n{sudo_response_text}",
+                reply_markup=None
+            )
+            
+            # 3. Durumu güncelle
+            req_data['status'] = 'REPLIED'
+            print(f"[{active_req_id}] Sudo yanıtı gönderdi. Durum: REPLIED. Kullanıcıya iletildi.")
+            
+            # Sudo'nun yazdığı mesajı silebiliriz (isteğe bağlı)
+            try:
+                await message.delete()
+            except:
+                pass 
+                
+            return
+
+# --- EKLENTİ SONU ---

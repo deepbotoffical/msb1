@@ -8,7 +8,7 @@ from datetime import datetime
 LOG_GROUP_ID = -1002663919856
 SUDO_ID = 7035704703
 
-# {user_id: {"ticket_id":..., "type":..., "messages":[Message,...], "timestamp":...}}
+# {user_id: {"ticket_id":..., "type":..., "messages":[str,...], "timestamp":...}}
 PENDING_TICKETS = {}
 SUDO_REPLY = {}  # {sudo_id: user_id}
 
@@ -54,21 +54,21 @@ async def select_ticket_type(client: Client, callback_query: CallbackQuery):
     await callback_query.message.reply_text(
         f"📝 Talep ID: `{ticket_id}`\n"
         f"Talep Türü: **{ticket_type.capitalize()}**\n"
-        f"Lütfen mesajınızı yazın veya medya gönderin.\n"
+        f"Lütfen mesajınızı yazın.\n"
         f"İptal için /iptal yazabilirsiniz.",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 # ==========================
-# Kullanıcı mesajı veya medyası
-@app.on_message(filters.private | filters.group)
+# Kullanıcının yazısı
+@app.on_message(filters.text)
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
     if user_id not in PENDING_TICKETS:
         return
 
-    PENDING_TICKETS[user_id]["messages"].append(message)
+    PENDING_TICKETS[user_id]["messages"].append(message.text)
     ticket_info = PENDING_TICKETS[user_id]
     ticket_id = ticket_info["ticket_id"]
     ticket_type = ticket_info["type"]
@@ -114,8 +114,8 @@ async def show_ticket(client: Client, callback_query: CallbackQuery):
         await callback_query.message.reply_text("⚠️ Talep içeriği alınamadı.")
         return
     try:
-        for msg in PENDING_TICKETS[user_id]["messages"]:
-            await msg.copy(callback_query.message.chat.id)
+        messages = "\n".join(PENDING_TICKETS[user_id]["messages"])
+        await callback_query.message.reply_text(f"💬 Talep içeriği:\n\n{messages}")
     except Exception:
         await callback_query.message.reply_text("⚠️ Talep içeriği iletilemedi.")
 
@@ -127,24 +127,23 @@ async def reply_with_bot(client: Client, callback_query: CallbackQuery):
     user_id = int(callback_query.data.split("_")[1])
     SUDO_REPLY[callback_query.from_user.id] = user_id
     await callback_query.message.reply_text(
-        f"✉️ Kullanıcıya yanıtınızı yazın veya medya gönderin.\n"
+        f"✉️ Kullanıcıya yanıtınızı yazın.\n"
         f"İptal için /iptal yazabilirsiniz."
     )
 
 
 # ==========================
 # Sudo yanıt gönderme
-@app.on_message(filters.private | filters.group)
+@app.on_message(filters.text)
 async def send_reply_to_user(client: Client, message: Message):
     sudo_id = message.from_user.id
     if sudo_id not in SUDO_REPLY:
         return
     user_id = SUDO_REPLY[sudo_id]
     try:
-        await message.copy(user_id)
         await client.send_message(
             user_id,
-            "💬 **DEEPMusic Destek Ekibi tarafından yanıtlandı.**",
+            f"💬 **DEEPMusic Destek Ekibi tarafından yanıtlandı.**\n\n{message.text}",
             parse_mode=ParseMode.MARKDOWN
         )
         await message.reply_text("✅ Yanıt başarıyla kullanıcıya iletildi.")

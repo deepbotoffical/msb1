@@ -3,53 +3,80 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, 
 from pyrogram.enums import ParseMode
 from ShrutiMusic import app
 import random
+from datetime import datetime
 
-LOG_GROUP_ID = -1002663919856  # Log grubu ID
+LOG_GROUP_ID = -1002663919856
 SUDO_ID = 7035704703
-PENDING_TICKETS = {}        # {user_id: ticket_id}
-SUDO_REPLY = {}             # {sudo_id: user_id}
 
+# {user_id: {"ticket_id":..., "type":..., "messages":[Message,...], "timestamp":...}}
+PENDING_TICKETS = {}
+SUDO_REPLY = {}  # {sudo_id: user_id}
 
+# ==========================
 # /destek komutu
 @app.on_message(filters.command("destek"))
 async def destek_panel(client: Client, message: Message):
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📝 Destek Talebi Oluştur", callback_data="open_ticket")]]
+        [
+            [
+                InlineKeyboardButton("📝 Öneri", callback_data="ticket_type_suggestion"),
+                InlineKeyboardButton("❌ Hata", callback_data="ticket_type_bug"),
+                InlineKeyboardButton("💡 Genel Sorun", callback_data="ticket_type_issue")
+            ]
+        ]
     )
     await message.reply_text(
         "🎧 **DEEPMusic Destek Paneli**\n\n"
-        "Sorununuzu veya önerinizi paylaşabilirsiniz.\n"
-        "Yardım ekibi en kısa sürede sizinle iletişime geçecektir.",
+        "Lütfen talep türünüzü seçin:",
         reply_markup=keyboard
     )
 
 
-# Talep başlatma
-@app.on_callback_query(filters.regex("open_ticket"))
-async def open_ticket(client: Client, callback_query: CallbackQuery):
+# ==========================
+# Talep türü seçildi
+@app.on_callback_query(filters.regex(r"ticket_type_(suggestion|bug|issue)"))
+async def select_ticket_type(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
+    ticket_type = callback_query.data.split("_")[2]
+
     if user_id in PENDING_TICKETS:
-        await callback_query.answer("📌 Zaten açık bir talebiniz var.", show_alert=True)
+        await callback_query.answer("📌 Zaten bir talebiniz açık.", show_alert=True)
         return
 
     ticket_id = random.randint(1000, 9999)
-    PENDING_TICKETS[user_id] = ticket_id
+    PENDING_TICKETS[user_id] = {
+        "ticket_id": ticket_id,
+        "type": ticket_type,
+        "messages": [],
+        "timestamp": datetime.now()
+    }
+
     await callback_query.message.reply_text(
-        f"📝 Lütfen sorununuzu veya önerinizi yazın ya da medya gönderin.\n"
-        f"Talep ID: `{ticket_id}`",
+        f"📝 Talep ID: `{ticket_id}`\n"
+        f"Talep Türü: **{ticket_type.capitalize()}**\n"
+        f"Lütfen mesajınızı yazın veya medya gönderin.\n"
+        f"İptal için /iptal yazabilirsiniz.",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# Kullanıcıdan talep alma (her tür medya dahil)
-@app.on_message(filters.create(lambda _, __, msg: msg.from_user and msg.from_user.id in PENDING_TICKETS))
+# ==========================
+# Kullanıcı mesajı veya medyası
+@app.on_message(filters.private | filters.group)
 async def receive_ticket(client: Client, message: Message):
     user_id = message.from_user.id
-    ticket_id = PENDING_TICKETS[user_id]
-    user_mention = message.from_user.mention
-    user_name = message.from_user.first_name
+    if user_id not in PENDING_TICKETS:
+        return
 
-    # Log’a özet bilgi
+    PENDING_TICKETS[user_id]["messages"].append(message)
+    ticket_info = PENDING_TICKETS[user_id]
+    ticket_id = ticket_info["ticket_id"]
+    ticket_type = ticket_info["type"]
+    timestamp = ticket_info["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+    user_mention = message.from_user.mention
+    chat_type = "Özel" if message.chat.type == "private" else message.chat.title
+
+    # Log özet
     keyboard = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📂 Talebi Göster", callback_data=f"show_{user_id}")],
@@ -59,9 +86,12 @@ async def receive_ticket(client: Client, message: Message):
 
     log_text = (
         f"🎟️ **Yeni Destek Talebi**\n\n"
+        f"🕓 Tarih: {timestamp}\n"
+        f"🆔 Kullanıcı ID: {user_id}\n"
         f"👤 Kullanıcı: {user_mention}\n"
-        f"🆔 Talep ID: `{ticket_id}`\n"
-        f"🗣️ Ad: {user_name}\n\n"
+        f"💡 Talep Türü: {ticket_type.capitalize()}\n"
+        f"Talep ID: `{ticket_id}`\n"
+        f"Yazıldığı yer: {chat_type}\n\n"
         f"💬 Talep detayını görmek için aşağıdaki butona tıklayın."
     )
 
@@ -69,47 +99,49 @@ async def receive_ticket(client: Client, message: Message):
     await client.send_message(SUDO_ID, log_text, reply_markup=keyboard)
 
     await message.reply_text(
-        "✅ Talebiniz alınmıştır.\nEn kısa sürede size dönüş yapılacaktır.",
+        f"✅ Talebiniz alınmıştır.\nEn kısa sürede size dönüş sağlanacaktır.",
         parse_mode=ParseMode.MARKDOWN
     )
 
-    del PENDING_TICKETS[user_id]
 
-
-# Log grubundan “Talebi Göster” butonu
+# ==========================
+# Talebi göster
 @app.on_callback_query(filters.regex("^show_"))
 async def show_ticket(client: Client, callback_query: CallbackQuery):
     user_id = int(callback_query.data.split("_")[1])
     await callback_query.answer("📄 Talep içeriği getiriliyor...")
-
+    if user_id not in PENDING_TICKETS:
+        await callback_query.message.reply_text("⚠️ Talep içeriği alınamadı.")
+        return
     try:
-        async for msg in client.get_chat_history(user_id, limit=1):
+        for msg in PENDING_TICKETS[user_id]["messages"]:
             await msg.copy(callback_query.message.chat.id)
     except Exception:
-        await callback_query.message.reply_text("⚠️ Talep içeriği alınamadı. Kullanıcıya ulaşılamıyor olabilir.")
+        await callback_query.message.reply_text("⚠️ Talep içeriği iletilemedi.")
 
 
-# “Bot ile Yanıtla”
+# ==========================
+# Bot ile yanıtla
 @app.on_callback_query(filters.regex("^reply_"))
 async def reply_with_bot(client: Client, callback_query: CallbackQuery):
     user_id = int(callback_query.data.split("_")[1])
     SUDO_REPLY[callback_query.from_user.id] = user_id
     await callback_query.message.reply_text(
-        f"✉️ {user_id} ID'li kullanıcıya yanıtınızı yazın veya medya gönderin.\n"
+        f"✉️ Kullanıcıya yanıtınızı yazın veya medya gönderin.\n"
         f"İptal için /iptal yazabilirsiniz."
     )
 
 
-# Sudo yanıt gönderme (metin veya medya)
-@app.on_message(filters.create(lambda _, __, msg: msg.from_user and msg.from_user.id in SUDO_REPLY))
+# ==========================
+# Sudo yanıt gönderme
+@app.on_message(filters.private | filters.group)
 async def send_reply_to_user(client: Client, message: Message):
     sudo_id = message.from_user.id
+    if sudo_id not in SUDO_REPLY:
+        return
     user_id = SUDO_REPLY[sudo_id]
-
     try:
-        # Yanıtı kopyala
-        sent = await message.copy(user_id)
-        # Altına destek ibaresi ekle
+        await message.copy(user_id)
         await client.send_message(
             user_id,
             "💬 **DEEPMusic Destek Ekibi tarafından yanıtlandı.**",
@@ -118,10 +150,10 @@ async def send_reply_to_user(client: Client, message: Message):
         await message.reply_text("✅ Yanıt başarıyla kullanıcıya iletildi.")
     except Exception as e:
         await message.reply_text(f"❌ Kullanıcıya yanıt gönderilemedi.\nSebep: {e}")
-
     del SUDO_REPLY[sudo_id]
 
 
+# ==========================
 # Sudo iptal komutu
 @app.on_message(filters.command("iptal") & filters.user(SUDO_ID))
 async def cancel_reply(client: Client, message: Message):

@@ -52,7 +52,7 @@ async def destek_turu_sec(client: Client, cq: CallbackQuery):
     await cq.message.reply_text(
         f"📝 **Talep ID:** `{ticket_id}`\n"
         f"**Tür:** {data.capitalize()}\n\n"
-        "Lütfen mesajınızı veya foto/video gönderin.\n"
+        "Lütfen mesajınızı veya foto/video/dosya gönderin.\n"
         "İptal etmek için /iptal yazabilir veya aşağıdan iptal edebilirsiniz.",
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
@@ -81,7 +81,7 @@ async def talep_alindi(client: Client, message: Message):
         f"**Mesaj:** {caption}"
     )
 
-    # Eğer mesaj gruptan geldiyse "Mesaja Git" ekle
+    # Butonlar
     buttons = []
     if message.chat.type in ["supergroup", "group"]:
         link = f"https://t.me/c/{str(message.chat.id)[4:]}/{message.id}"
@@ -94,14 +94,15 @@ async def talep_alindi(client: Client, message: Message):
     buttons.append([InlineKeyboardButton("❌ Talep İptal", callback_data=f"iptal_{ticket_id}")])
     markup = InlineKeyboardMarkup(buttons)
 
-    # Medya veya yazı log grubu ve sudo’ya gönder
-    if message.photo or message.video or message.document:
+    # Log ve Sudo’ya gönder
+    if message.media:
         await message.copy(LOG_GROUP_ID, caption=log_text, reply_markup=markup)
         await message.copy(SUDO_ID, caption=log_text, reply_markup=markup)
     else:
         await client.send_message(LOG_GROUP_ID, log_text, reply_markup=markup)
         await client.send_message(SUDO_ID, log_text, reply_markup=markup)
 
+    # Kullanıcıya yanıt
     await message.reply_text(
         f"✅ Talebiniz alınmıştır.\n**Talep ID:** `{ticket_id}`\nEn kısa sürede dönüş yapılacaktır.",
         parse_mode=ParseMode.MARKDOWN
@@ -110,7 +111,7 @@ async def talep_alindi(client: Client, message: Message):
     del PENDING_TICKETS[user_id]
 
 # ==========================
-# Sudo “Bot ile Yanıtla”ya basıyor
+# Sudo “Bot ile Yanıtla” butonuna basıyor
 # ==========================
 @app.on_callback_query(filters.regex("^yanitla_"))
 async def sudo_yanit_modu(client: Client, cq: CallbackQuery):
@@ -122,13 +123,13 @@ async def sudo_yanit_modu(client: Client, cq: CallbackQuery):
     WAITING_FOR_REPLY[cq.from_user.id] = user_id
 
     await cq.message.reply_text(
-        f"💬 Lütfen kullanıcıya göndermek istediğiniz yanıtı yazın.\n"
+        f"💬 Lütfen kullanıcıya göndermek istediğiniz yanıtı yazın veya medya gönderin.\n"
         f"ID: `{user_id}`",
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ==========================
-# Sudo mesaj gönderiyor
+# Sudo yanıt gönderiyor (her şey destekli)
 # ==========================
 @app.on_message(filters.user(SUDO_ID))
 async def sudo_mesaj_gonder(client: Client, message: Message):
@@ -137,20 +138,19 @@ async def sudo_mesaj_gonder(client: Client, message: Message):
         return
 
     user_id = WAITING_FOR_REPLY[sudo_id]
+    del WAITING_FOR_REPLY[sudo_id]
 
     try:
-        if message.text:
+        if message.media:
+            await message.copy(user_id, caption=message.caption or "💬 **Destek Yanıtı:**")
+        elif message.text:
             await client.send_message(user_id, f"💬 **Destek Yanıtı:**\n{message.text}")
-        elif message.photo or message.video or message.document:
-            await message.copy(user_id, caption="💬 **Destek Yanıtı:**")
         else:
-            await client.send_message(user_id, "📎 Destek ekibinden bir yanıt geldi.")
+            await client.send_message(user_id, "💬 Destek ekibinden bir yanıt geldi.")
 
-        await message.reply_text("✅ Yanıt kullanıcıya gönderildi.")
+        await message.reply_text("✅ Yanıt kullanıcıya başarıyla gönderildi.")
     except Exception as e:
         await message.reply_text(f"⚠️ Kullanıcıya mesaj gönderilemedi.\n`{e}`")
-
-    del WAITING_FOR_REPLY[sudo_id]
 
 # ==========================
 # Talep iptali
